@@ -76,12 +76,18 @@ BUNDLE = {
 
 lakebase_name = f"{DEPLOYMENT_NAME}{BUNDLE['lakebase']['name_suffix']}"
 scope_plan = [
-    {"env": sc["env"], "name": f"{DEPLOYMENT_NAME}{sc['suffix']}", "backend": sc["backend"]}
+    {
+        "env": sc["env"],
+        "name": f"{DEPLOYMENT_NAME}{sc['suffix']}",
+        "backend": sc["backend"],
+    }
     for sc in BUNDLE["secret_scopes"]
 ]
 
 print(f"deployment name  : {DEPLOYMENT_NAME}")
-print(f"Lakebase instance: {lakebase_name}  (capacity={BUNDLE['lakebase']['capacity']})")
+print(
+    f"Lakebase instance: {lakebase_name}  (capacity={BUNDLE['lakebase']['capacity']})"
+)
 if scope_plan:
     print("secret scopes    :")
     for s in scope_plan:
@@ -107,7 +113,9 @@ existing = {i.name for i in w.database.list_database_instances()}
 if lakebase_name in existing:
     print(f"Lakebase instance already exists: {lakebase_name}")
 else:
-    print(f"creating Lakebase instance {lakebase_name} (capacity={BUNDLE['lakebase']['capacity']})...")
+    print(
+        f"creating Lakebase instance {lakebase_name} (capacity={BUNDLE['lakebase']['capacity']})..."
+    )
     w.database.create_database_instance_and_wait(
         DatabaseInstance(name=lakebase_name, capacity=BUNDLE["lakebase"]["capacity"])
     )
@@ -152,7 +160,7 @@ print("=" * 72)
 print("WHEN INSTALLING REFLEX, BIND THESE RESOURCES")
 print("=" * 72)
 print(f"  lakebase-db   ->  select Lakebase instance:  {lakebase_name}")
-print( "  sandbox-app   ->  select the installed Reflex: Sandbox app")
+print("  sandbox-app   ->  select the installed Reflex: Sandbox app")
 print()
 print("  Scope-name env vars are bound via `secret` resources — for each resource")
 print("  below, select the scope and its '__SCOPE_NAME__' key:")
