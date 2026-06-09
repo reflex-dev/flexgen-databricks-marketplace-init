@@ -179,6 +179,7 @@ print(f"secret scopes : {', '.join(scope_names) or '(none declared)'}")
 
 # COMMAND ----------
 
+
 def _parent(project_id: str, branch_id: str) -> str:
     return f"projects/{project_id}/branches/{branch_id}"
 
@@ -192,7 +193,9 @@ def _jwt_sub(token: str) -> str:
 def _endpoint_host(endpoint: Endpoint) -> str:
     if endpoint.status and endpoint.status.hosts and endpoint.status.hosts.host:
         return endpoint.status.hosts.host
-    raise RuntimeError(f"Lakebase endpoint {endpoint.name or '<unknown>'!r} has no host")
+    raise RuntimeError(
+        f"Lakebase endpoint {endpoint.name or '<unknown>'!r} has no host"
+    )
 
 
 def _ensure_role(service_principal: str) -> None:
@@ -211,7 +214,9 @@ def _ensure_role(service_principal: str) -> None:
     ).wait()
 
 
-endpoint = w.postgres.get_endpoint(f"{_parent(project_id, branch_id)}/endpoints/primary")
+endpoint = w.postgres.get_endpoint(
+    f"{_parent(project_id, branch_id)}/endpoints/primary"
+)
 assert endpoint.name, "Lakebase primary endpoint has no name"
 _ensure_role(builder_sp)
 
@@ -225,17 +230,49 @@ dsn = (
     f"{database_name}?sslmode=require"
 )
 
-print(f"granting public-schema privileges to {builder_sp} on {project_id}/{database_name}...")
+print(
+    f"granting public-schema privileges to {builder_sp} on {project_id}/{database_name}..."
+)
 with psycopg.connect(dsn, autocommit=True) as conn:
     principal = sql.Identifier(builder_sp)
-    conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(database_name), principal))
-    conn.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(principal))
-    conn.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(principal))
-    conn.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(principal))
-    conn.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO {}").format(principal))
-    conn.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO {}").format(principal))
-    conn.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO {}").format(principal))
-    conn.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO {}").format(principal))
+    conn.execute(
+        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(database_name), principal
+        )
+    )
+    conn.execute(
+        sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(principal)
+    )
+    conn.execute(
+        sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(
+            principal
+        )
+    )
+    conn.execute(
+        sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(
+            principal
+        )
+    )
+    conn.execute(
+        sql.SQL("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO {}").format(
+            principal
+        )
+    )
+    conn.execute(
+        sql.SQL(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO {}"
+        ).format(principal)
+    )
+    conn.execute(
+        sql.SQL(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO {}"
+        ).format(principal)
+    )
+    conn.execute(
+        sql.SQL(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO {}"
+        ).format(principal)
+    )
 print("Lakebase permissions configured")
 
 # COMMAND ----------
@@ -247,10 +284,28 @@ print("Lakebase permissions configured")
 
 volume_full_name = f"{scm_catalog}.{scm_schema}.{scm_volume}"
 
-w.grants.update("CATALOG", scm_catalog, changes=[PermissionsChange(principal=sandbox_sp, add=[Privilege.USE_CATALOG])])
-w.grants.update("SCHEMA", f"{scm_catalog}.{scm_schema}", changes=[PermissionsChange(principal=sandbox_sp, add=[Privilege.USE_SCHEMA])])
-w.grants.update("VOLUME", volume_full_name, changes=[PermissionsChange(principal=sandbox_sp, add=[Privilege.READ_VOLUME, Privilege.WRITE_VOLUME])])
-print(f"granted USE_CATALOG/USE_SCHEMA/READ+WRITE_VOLUME on {volume_full_name} to {sandbox_sp}")
+w.grants.update(
+    "CATALOG",
+    scm_catalog,
+    changes=[PermissionsChange(principal=sandbox_sp, add=[Privilege.USE_CATALOG])],
+)
+w.grants.update(
+    "SCHEMA",
+    f"{scm_catalog}.{scm_schema}",
+    changes=[PermissionsChange(principal=sandbox_sp, add=[Privilege.USE_SCHEMA])],
+)
+w.grants.update(
+    "VOLUME",
+    volume_full_name,
+    changes=[
+        PermissionsChange(
+            principal=sandbox_sp, add=[Privilege.READ_VOLUME, Privilege.WRITE_VOLUME]
+        )
+    ],
+)
+print(
+    f"granted USE_CATALOG/USE_SCHEMA/READ+WRITE_VOLUME on {volume_full_name} to {sandbox_sp}"
+)
 
 # COMMAND ----------
 
@@ -260,7 +315,9 @@ print(f"granted USE_CATALOG/USE_SCHEMA/READ+WRITE_VOLUME on {volume_full_name} t
 # COMMAND ----------
 
 for scope_name in scope_names:
-    w.secrets.put_acl(scope=scope_name, principal=builder_sp, permission=AclPermission.MANAGE)
+    w.secrets.put_acl(
+        scope=scope_name, principal=builder_sp, permission=AclPermission.MANAGE
+    )
     print(f"granted MANAGE on {scope_name} to {builder_sp}")
 
 # COMMAND ----------
