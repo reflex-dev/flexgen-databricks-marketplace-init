@@ -5,16 +5,20 @@
 # MAGIC Run it **last** — after both apps are
 # MAGIC installed (installing an app creates its service principal). The **Reflex
 # MAGIC app name is the only input**; everything else (its service principal, the
-# MAGIC Lakebase instance, the Reflex: Sandbox app + its SCM volume, the secret
-# MAGIC scopes) is discovered from the apps' resource bindings. It grants:
+# MAGIC Lakebase instance, the Reflex: Sandbox app + its SCM volume) is discovered
+# MAGIC from the apps' resource bindings. It grants:
 # MAGIC
 # MAGIC - **Reflex's SP** → a Postgres role + schema privileges in Lakebase (the
 # MAGIC   binding only grants database-level CONNECT/CREATE, not the schema-level
-# MAGIC   CREATE that `reflex db migrate` needs) and `MANAGE` on the secret scopes,
+# MAGIC   CREATE that `reflex db migrate` needs),
 # MAGIC - **Reflex: Sandbox's SP** → `USE CATALOG` / `USE SCHEMA` / `READ+WRITE
 # MAGIC   VOLUME` on the SCM volume bound to Reflex: Sandbox (the app's
 # MAGIC   `uc_securable` binding covers the volume itself but not the parent
 # MAGIC   catalog/schema).
+# MAGIC
+# MAGIC Secret-scope access is NOT granted here — the Reflex app binds each scope
+# MAGIC with `WRITE`, which (because secret ACLs are scope-level) already lets its
+# MAGIC SP read and write every secret in the scope.
 # MAGIC
 # MAGIC Run it as a **workspace admin**. Edit the one **EDIT ME** cell below, then
 # MAGIC **Run All**. (The `%pip` cell must run first — it restarts Python to load a
@@ -90,7 +94,6 @@ from databricks.sdk.service.postgres import (
     RoleIdentityType,
     RoleRoleSpec,
 )
-from databricks.sdk.service.workspace import AclPermission
 from psycopg import sql
 
 w = WorkspaceClient()
@@ -145,14 +148,6 @@ scm_catalog, scm_schema, scm_volume = _binding(sandbox, "uc_securable")[
     "securable_full_name"
 ].split(".")
 
-# Scope names come straight from the builder's `secret` resource bindings — the
-# admin selected each scope (+ the __SCOPE_NAME__ key) at install time.
-scope_names = [
-    r["secret"]["scope"]
-    for r in builder.get("resources", [])
-    if "secret" in r and r["secret"].get("scope")
-]
-
 # COMMAND ----------
 
 # MAGIC %md ## Verify discovered resources
@@ -165,17 +160,17 @@ print(f"Reflex          : {BUILDER_APP_NAME}  (SP {builder_sp})")
 print(f"Reflex: Sandbox : {sandbox_app_name}  (SP {sandbox_sp})")
 print(f"Lakebase      : {project_id} / {database_name}  (branch {branch_id})")
 print(f"SCM volume    : {scm_catalog}.{scm_schema}.{scm_volume}")
-print(f"secret scopes : {', '.join(scope_names) or '(none declared)'}")
 
 # COMMAND ----------
 
 # MAGIC %md ## Lakebase: Reflex's SP — Postgres role + schema privileges
 # MAGIC Picking the Lakebase instance at install auto-creates the SP's Postgres
 # MAGIC role and grants CONNECT + CREATE at the *database* level. This step adds
-# MAGIC the schema-level USAGE + CREATE on `public` that the binding does NOT
-# MAGIC grant — required for `reflex db migrate` to create tables. The role
-# MAGIC creation here is an idempotent safety net. Mirrors
-# MAGIC `scripts/grant_lakebase_permissions.py` from the bundle.
+# MAGIC the schema-level USAGE + CREATE that the binding does NOT grant —
+# MAGIC required for `reflex db migrate` to create tables — on `public` and, when
+# MAGIC it already exists (a previously provisioned/migrated database), on the
+# MAGIC app's `flexgen` schema. The role creation here is an idempotent safety
+# MAGIC net. Mirrors `scripts/grant_lakebase_permissions.py` from the bundle.
 
 # COMMAND ----------
 
@@ -230,9 +225,12 @@ dsn = (
     f"{database_name}?sslmode=require"
 )
 
-print(
-    f"granting public-schema privileges to {builder_sp} on {project_id}/{database_name}..."
-)
+# `flexgen` exists only on an already-migrated database (upgrade scenario, or
+# pointing a new install at a previously provisioned instance) — without these
+# grants the new SP hits "permission denied for schema flexgen". On a fresh
+# database the app's own migrations create (and own) the schema.
+APP_SCHEMAS = ["public", "flexgen"]
+
 with psycopg.connect(dsn, autocommit=True) as conn:
     principal = sql.Identifier(builder_sp)
     conn.execute(
@@ -240,39 +238,36 @@ with psycopg.connect(dsn, autocommit=True) as conn:
             sql.Identifier(database_name), principal
         )
     )
-    conn.execute(
-        sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(principal)
-    )
-    conn.execute(
-        sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(
-            principal
+    existing_schemas = {
+        row[0]
+        for row in conn.execute(
+            "SELECT nspname FROM pg_namespace WHERE nspname = ANY(%s)", (APP_SCHEMAS,)
         )
-    )
-    conn.execute(
-        sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(
-            principal
+    }
+    for schema_name in APP_SCHEMAS:
+        if schema_name not in existing_schemas:
+            print(f"schema {schema_name} does not exist yet; skipping")
+            continue
+        print(
+            f"granting {schema_name}-schema privileges to {builder_sp} "
+            f"on {project_id}/{database_name}..."
         )
-    )
-    conn.execute(
-        sql.SQL("GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO {}").format(
-            principal
+        schema = sql.Identifier(schema_name)
+        conn.execute(
+            sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO {}").format(schema, principal)
         )
-    )
-    conn.execute(
-        sql.SQL(
-            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO {}"
-        ).format(principal)
-    )
-    conn.execute(
-        sql.SQL(
-            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO {}"
-        ).format(principal)
-    )
-    conn.execute(
-        sql.SQL(
-            "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON FUNCTIONS TO {}"
-        ).format(principal)
-    )
+        for objects in ("TABLES", "SEQUENCES", "FUNCTIONS"):
+            conn.execute(
+                sql.SQL(
+                    f"GRANT ALL PRIVILEGES ON ALL {objects} IN SCHEMA {{}} TO {{}}"
+                ).format(schema, principal)
+            )
+            conn.execute(
+                sql.SQL(
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA {{}} "
+                    f"GRANT ALL PRIVILEGES ON {objects} TO {{}}"
+                ).format(schema, principal)
+            )
 print("Lakebase permissions configured")
 
 # COMMAND ----------
@@ -309,16 +304,11 @@ print(
 
 # COMMAND ----------
 
-# MAGIC %md ## Secret scopes: Reflex's SP — MANAGE
-# MAGIC Mirrors the ACLs in `resources/secret_scopes.yml`.
-
-# COMMAND ----------
-
-for scope_name in scope_names:
-    w.secrets.put_acl(
-        scope=scope_name, principal=builder_sp, permission=AclPermission.MANAGE
-    )
-    print(f"granted MANAGE on {scope_name} to {builder_sp}")
+# MAGIC %md ## Secret scopes — no grant needed
+# MAGIC The Reflex app binds each secret scope with `WRITE` permission, and
+# MAGIC Databricks secret ACLs are scope-level, so installing Reflex already
+# MAGIC grants its SP read+write over every secret in the scope. Nothing to do
+# MAGIC here.
 
 # COMMAND ----------
 
